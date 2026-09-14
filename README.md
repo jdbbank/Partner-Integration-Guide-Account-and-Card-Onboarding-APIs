@@ -807,3 +807,180 @@ When contacting JDB support, include:
 - Sanitized request body with secrets and images removed.
 
 Do not include API keys, JWT tokens, AES secrets, webhook secrets, or full Base64 images.
+
+
+
+# JDB Events Notification System (Webhook API)
+
+This document outlines the webhook notification system used by JDB to notify Partners about various asynchronous events. When a specific event occurs within the JDB system (e.g., an account is approved or a card is activated), a JSON payload is sent via an HTTP POST request to the Partner's configured webhook URL.
+
+## 1. Webhook Endpoint Requirements
+- **Method:** `POST`
+- **Content-Type:** `application/json`
+- **Header:** Must accept the `X-Signature` header for payload verification.
+
+---
+
+## 2. Security & Signature Verification
+
+To ensure that the webhook payload is genuinely from JDB and has not been tampered with, JDB signs each request using HMAC SHA-256. 
+
+### Sender Side (JDB)
+JDB generates the signature using the JSON payload and a shared Secret Key:
+```javascript
+// HMAC signature generation
+const crypto = require('crypto');
+
+function generateHmacSignature(secret, payload) {
+  const jsonPayload = JSON.stringify(payload);
+  return crypto.createHmac("sha256", secret).update(jsonPayload).digest("hex");
+}
+```
+
+### Recipient Side (Partner)
+The Partner must verify the `X-Signature` header in the incoming webhook request:
+```javascript
+const crypto = require('crypto');
+
+function verifyHmacSignature(payload, receivedSignature, secretKey) {
+  const computedSignature = crypto
+    .createHmac('sha256', secretKey)
+    .update(JSON.stringify(payload))
+    .digest('hex');
+    
+  return computedSignature === receivedSignature;
+}
+
+// Example Webhook Endpoint (Express.js)
+app.post('/webhook', (req, res) => {
+  const payload = req.body;
+  const signature = req.headers['x-signature'];
+
+  if (!signature || !verifyHmacSignature(payload, signature, SECRET_KEY)) {
+    console.warn('Signature verification failed');
+    return res.status(401).json({ success: false, message: 'Invalid signature' });
+  }
+
+  // Signature verified, process the payload
+  console.log('Signature verified, processing data:', payload);
+
+  // Reply to JDB
+  return res.status(200).json({ success: true, code: 'SUCCESS', message: 'Webhook received' });
+});
+```
+
+---
+
+## 3. Events & Payloads
+
+The `type` field in the payload determines the structure and context of the event. All payloads are published as JSON objects.
+
+### 3.1. UPDATE_MEMBER_REQUEST
+Fired when there is a request to update a member by card.
+```json
+{
+  "type": "UPDATE_MEMBER_REQUEST",
+  "batchNo": "12345",
+  "idFrom": "98765"
+}
+```
+
+### 3.2. CARD_APPLICATION_APPROVED
+Fired when a partner's card application has been successfully approved.
+```json
+{
+  "type": "CARD_APPLICATION_APPROVED",
+  "batchNo": "12345",
+  "idFrom": null,
+  "accountNo": "121212121212121",
+  "cardNo": "1234123412341234"
+}
+```
+
+### 3.3. CARD_APPLICATION_REJECTED
+Fired when a partner's card application is rejected.
+```json
+{
+  "type": "CARD_APPLICATION_REJECTED",
+  "batchNo": "12345",
+  "idFrom": "98765",
+  "reason": "Passport image is not valid"
+}
+```
+
+### 3.4. CARD_ACTIVATED
+Fired when a card has been successfully activated.
+```json
+{
+  "type": "CARD_ACTIVATED",
+  "batchNo": "12345",
+  "cardId": "C-98765",
+  "accountNo": "121212121212121"
+}
+```
+
+### 3.5. IB_ACCOUNT_ACTIVATED
+Fired when Internet Banking (IB) has been activated for an account.
+```json
+{
+  "type": "IB_ACCOUNT_ACTIVATED",
+  "batchNo": "12345",
+  "idFrom": "98765",
+  "reason": "Internet Banking activated successfully"
+}
+```
+
+### 3.6. CMS_CARD_ISSUANCE
+Fired for CMS card issuance status updates.
+```json
+{
+  "type": "CMS_CARD_ISSUANCE",
+  "batchRef": "REF12345",
+  "recordId": "REC67890",
+  "status": "ISSUED",
+  "cardNumber": "1234123412341234",
+  "failure_reason": "Any failure details here if applicable"
+}
+```
+*(Note: `cardNumber` and `failure_reason` are optional depending on the `status`)*
+
+### 3.7. CARD_ISSUANCE
+Fired for general card issuance request status updates.
+```json
+{
+  "type": "CARD_ISSUANCE",
+  "requestId": "REQ12345",
+  "request_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "COMPLETED",
+  "failure_reason": "Any failure details here if applicable"
+}
+```
+*(Note: `failure_reason` is optional)*
+
+### 3.8. CLOSURE_REQUEST
+Fired when there is a status update regarding an account or card closure request.
+```json
+{
+  "type": "CLOSURE_REQUEST",
+  "closure_id": "CLS12345",
+  "request_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "APPROVED",
+  "failure_reason": "Any failure details here if applicable"
+}
+```
+*(Note: `failure_reason` is optional)*
+
+---
+
+## 4. Response Expectations
+When the Partner's system receives the webhook event, it should respond with an HTTP `200 OK` status and a JSON payload to confirm receipt. JDB uses this to know if the message was delivered successfully.
+
+**Expected Partner Response:**
+```json
+{
+  "success": true,
+  "code": "SUCCESS",
+  "message": "Webhook received"
+}
+```
+
